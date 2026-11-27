@@ -217,6 +217,8 @@ export async function reviewCmd(opts: ReviewCmdOptions): Promise<void> {
             results.push({ id: item.id, ok: result.ok, reason: result.reason });
         }
 
+        if (results.some((result) => !result.ok)) process.exitCode = 1;
+
         if (jsonMode) {
             // JSON.stringify drops an undefined dryRun, so the key appears only in dry runs (same below).
             console.log(JSON.stringify({ results, skipped: skipped.map((s) => s.id), dryRun: dryRun ? true : undefined }));
@@ -265,6 +267,8 @@ export async function reviewCmd(opts: ReviewCmdOptions): Promise<void> {
     const item = items.find((i) => i.id === idArg);
 
     if (!item) {
+        if (apply) process.exitCode = 1;
+
         log.warn(`[review] not found: id="${idArg}"`);
 
         if (jsonMode) {
@@ -292,6 +296,8 @@ export async function reviewCmd(opts: ReviewCmdOptions): Promise<void> {
     // ── apply 模式 ────────────────────────────────────────
     if (apply) {
         const result = await applyReview(cwd, item, dryRun);
+
+        if (!result.ok) process.exitCode = 1;
 
         if (jsonMode) {
             console.log(JSON.stringify({ ok: result.ok, reason: result.reason, id: idArg, dryRun: dryRun ? true : undefined }));

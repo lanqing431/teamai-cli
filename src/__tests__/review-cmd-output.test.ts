@@ -21,13 +21,17 @@ const CJK = /[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]/;
 
 let tmpDir: string;
 let consoleSpy: MockInstance<typeof console.log>;
+let originalExitCode: typeof process.exitCode;
 
 beforeEach(() => {
+  originalExitCode = process.exitCode;
+  process.exitCode = 0;
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-review-'));
   consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 });
 
 afterEach(() => {
+  process.exitCode = originalExitCode;
   consoleSpy.mockRestore();
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });

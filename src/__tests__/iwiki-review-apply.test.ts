@@ -90,8 +90,11 @@ function signal(): { promise: Promise<void>; resolve: () => void } {
 describe('iwiki review apply 闭环 e2e', () => {
     let cwd: string;
     let originalCwd: string;
+    let originalExitCode: typeof process.exitCode;
 
     beforeEach(async () => {
+        originalExitCode = process.exitCode;
+        process.exitCode = 0;
         cwd = await makeWorkdir();
         originalCwd = process.cwd();
         process.chdir(cwd);
@@ -99,6 +102,7 @@ describe('iwiki review apply 闭环 e2e', () => {
     });
 
     afterEach(async () => {
+        process.exitCode = originalExitCode;
         vi.restoreAllMocks();
         vi.mocked(readRegularFile).mockReset();
         process.chdir(originalCwd);

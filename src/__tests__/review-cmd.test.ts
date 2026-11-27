@@ -61,8 +61,11 @@ describe('review-cmd', () => {
     let cwd: string;
     let originalCwd: string;
     let consoleSpy: MockInstance<typeof console.log>;
+    let originalExitCode: typeof process.exitCode;
 
     beforeEach(async () => {
+        originalExitCode = process.exitCode;
+        process.exitCode = 0;
         cwd = await makeWorkdir();
         originalCwd = process.cwd();
         process.chdir(cwd);
@@ -75,6 +78,7 @@ describe('review-cmd', () => {
     });
 
     afterEach(async () => {
+        process.exitCode = originalExitCode;
         process.chdir(originalCwd);
         await fs.remove(cwd);
         consoleSpy.mockRestore();
@@ -143,17 +147,29 @@ describe('review-cmd', () => {
         expect(await fs.readFile(targetFile, 'utf8')).toBe('# doc patched');
     });
 
-    it('apply kind=domain-drift → 不调 patchManagedSection，jsonl 不变', async () => {
+    it.each([false, true])('keeps an unsupported apply queued and exits unsuccessfully (json=%s)', async (json) => {
         const item = makeItem({ kind: 'domain-drift' });
         (loadPendingReview as ReturnType<typeof vi.fn>).mockResolvedValue([item]);
 
-        await reviewCmd({ idArg: 'abc123def456', apply: true });
+        await reviewCmd({ idArg: 'abc123def456', apply: true, json });
+
+        expect(process.exitCode).toBe(1);
 
         expect(patchManagedSection).not.toHaveBeenCalled();
         expect(removePendingReview).not.toHaveBeenCalled();
 
         const output = consoleSpy.mock.calls.map((c) => c.join(' ')).join('\n');
         expect(output).toContain('does not support auto-apply');
+    });
+
+    it.each([false, true])('exits unsuccessfully when the requested apply ID is missing (json=%s)', async (json) => {
+        vi.mocked(loadPendingReview).mockResolvedValue([]);
+
+        await reviewCmd({ idArg: 'missing', apply: true, json });
+
+        expect(process.exitCode).toBe(1);
+        expect(patchManagedSection).not.toHaveBeenCalled();
+        expect(removePendingReview).not.toHaveBeenCalled();
     });
 
     // ── reject 模式 ───────────────────────────────────────
@@ -189,6 +205,27 @@ describe('review-cmd', () => {
 
         const output = consoleSpy.mock.calls.map((c) => c.join(' ')).join('\n');
         expect(output).toContain('skipped');
+        expect(process.exitCode).toBe(0);
+    });
+
+    it.each([false, true])('reports partial batch failure without stopping successful applies (json=%s)', async (json) => {
+        const good = makeItem({ id: 'good', target: { file: 'good.md', section: 'glossary' } });
+        const missing = makeItem({ id: 'missing', target: { file: 'missing.md', section: 'glossary' } });
+        await fs.writeFile(path.join(cwd, 'good.md'), '# document');
+        vi.mocked(loadPendingReview).mockResolvedValue([missing, good]);
+        vi.mocked(patchManagedSection).mockReturnValue('# patched');
+
+        await reviewCmd({ allApply: true, json });
+
+        expect(process.exitCode).toBe(1);
+        expect(await fs.readFile(path.join(cwd, 'good.md'), 'utf8')).toBe('# patched');
+        expect(patchManagedSection).toHaveBeenCalledOnce();
+        const output = consoleSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+        if (json) {
+            expect(JSON.parse(output)).toMatchObject({ results: [{ id: 'missing', ok: false }, { id: 'good', ok: true }] });
+        } else {
+            expect(output).toContain('1 succeeded, 1 failed, 0 skipped');
+        }
     });
 
     it('--json 输出有效 JSON（apply 模式）', async () => {
