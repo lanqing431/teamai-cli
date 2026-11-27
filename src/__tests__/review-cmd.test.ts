@@ -147,13 +147,13 @@ describe('review-cmd', () => {
         expect(await fs.readFile(targetFile, 'utf8')).toBe('# doc patched');
     });
 
-    it.each([false, true])('keeps an unsupported apply queued and exits unsuccessfully (json=%s)', async (json) => {
+    it.each([[false, false], [true, false], [false, true], [true, true]])('keeps an unsupported apply queued and only fails an actual apply (json=%s, dryRun=%s)', async (json, dryRun) => {
         const item = makeItem({ kind: 'domain-drift' });
         (loadPendingReview as ReturnType<typeof vi.fn>).mockResolvedValue([item]);
 
-        await reviewCmd({ idArg: 'abc123def456', apply: true, json });
+        await reviewCmd({ idArg: 'abc123def456', apply: true, json, dryRun });
 
-        expect(process.exitCode).toBe(1);
+        expect(process.exitCode).toBe(dryRun ? 0 : 1);
 
         expect(patchManagedSection).not.toHaveBeenCalled();
         expect(removePendingReview).not.toHaveBeenCalled();
@@ -162,12 +162,12 @@ describe('review-cmd', () => {
         expect(output).toContain('does not support auto-apply');
     });
 
-    it.each([false, true])('exits unsuccessfully when the requested apply ID is missing (json=%s)', async (json) => {
+    it.each([[false, false], [true, false], [false, true], [true, true]])('only fails an actual apply when the requested ID is missing (json=%s, dryRun=%s)', async (json, dryRun) => {
         vi.mocked(loadPendingReview).mockResolvedValue([]);
 
-        await reviewCmd({ idArg: 'missing', apply: true, json });
+        await reviewCmd({ idArg: 'missing', apply: true, json, dryRun });
 
-        expect(process.exitCode).toBe(1);
+        expect(process.exitCode).toBe(dryRun ? 0 : 1);
         expect(patchManagedSection).not.toHaveBeenCalled();
         expect(removePendingReview).not.toHaveBeenCalled();
     });
