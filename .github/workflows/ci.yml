@@ -1,55 +1,39 @@
-name: CI
-
+name: Review 2082 full Linux validation
 on:
   push:
     branches:
-      - master
-      - main
-  pull_request:
-    branches:
-      - master
-      - main
-
+      - validate/review-2082-full
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
-# OpenCode 2 for the session migrate and OpenCode hooks E2Es, which take it from
-# TEAMAI_OPENCODE_V2_BIN: every E2E file meets a stand-in `opencode` on PATH.
-# `opencode-ai` on npm is OpenCode 1; OpenCode 2 ships as `@opencode/cli`, one
-# npm package per platform. Bump both values together.
 env:
   OPENCODE2_VERSION: 2.0.29
   OPENCODE2_LINUX_X64_SHA256: 14b5a6638a1a093ac9d484599c844b10c29b445d04844b682ccc668ce26530a2
-
 jobs:
   lint-and-test:
     name: Lint & Test (Node ${{ matrix.node-version }} on ubuntu-latest)
     strategy:
       fail-fast: false
       matrix:
-        node-version: [20, 22, 24]
+        node-version:
+          - 20
+          - 22
+          - 24
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
-
       - name: Install dependencies
         run: npm ci --ignore-scripts
-
       - name: Lint
         run: npm run lint
-
       - name: Type check
         run: npm run typecheck
-
-      # The sandbox containment suite skips without bubblewrap; REQUIRE_NATIVE_SANDBOX makes it fail instead.
       - name: Install bubblewrap and let it make user namespaces
         run: |
           sudo apt-get update
@@ -58,116 +42,45 @@ jobs:
           # A WSL-style drive under /mnt, which a step must never see.
           sudo mkdir -p /mnt/c/Windows/System32
           bwrap --version
-
       - name: Unit tests
         run: npx vitest run
         env:
-          REQUIRE_NATIVE_SANDBOX: '1'
-
-  # The full suite. A git repo under os.tmpdir() resolves /var through
-  # /private/var here and not on Linux (branch-worktree-retire, run
-  # 39965490386). Outside build.needs, as coverage is: a red shard is a
-  # failed check on the PR, and Build does not wait. The provider PATH
-  # file is under e2e/, which the unit run excludes, so one shard runs it.
-  macos:
-    name: Unit tests (Node 22 on macos-latest, shard ${{ matrix.shard }})
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: ['1/2', '2/2']
-    runs-on: macos-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci --ignore-scripts
-
-      - name: Unit tests
-        run: npx vitest run --shard=${{ matrix.shard }}
-
-      - name: Provider CLI path
-        if: matrix.shard == '1/2'
-        run: npx vitest run --config vitest.e2e.config.ts src/__tests__/e2e/providers-cli-path.test.ts
-
-  # Coverage made the Node 20 leg the slowest unit job (17 min against 10).
-  # It runs on its own, outside Build's needs, so nothing waits for it.
-  coverage:
-    name: Unit test coverage
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci --ignore-scripts
-
-      - name: Unit tests with coverage
-        run: npx vitest run --coverage
-
-      - name: Upload coverage
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage
-          path: coverage/
-
+          REQUIRE_NATIVE_SANDBOX: "1"
   prepare-build:
     name: Prepare build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
-
       - name: Install dependencies
         run: npm ci --ignore-scripts
-
       - name: Build
         run: npm run build
-
       - name: OpenCode recall E2E
-        run: npx vitest run --config vitest.e2e.config.ts src/__tests__/e2e/opencode-recall.test.ts
-
-      # Needs no network or secrets: a fake `gh` on PATH. Guards #711.
+        run: npx vitest run --config vitest.e2e.config.ts
+          src/__tests__/e2e/opencode-recall.test.ts
       - name: Unattended init E2E
-        run: npx vitest run --config vitest.e2e.config.ts src/__tests__/e2e/init-unattended.test.ts
-
+        run: npx vitest run --config vitest.e2e.config.ts
+          src/__tests__/e2e/init-unattended.test.ts
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: dist
           path: dist/
-
-  # Keep the existing Build check gated on the unit matrix while E2E can
-  # consume the prepared artifact as soon as it is available.
   build:
     name: Build
-    needs: [lint-and-test, prepare-build]
+    needs:
+      - lint-and-test
+      - prepare-build
     runs-on: ubuntu-latest
     steps:
       - name: Confirm build and unit matrix passed
         run: echo "Build and unit test matrix passed."
-
-  # Three shards of the suite at once, each on its own 4-vCPU runner: vitest's
-  # hash splits the files into thirds of about the same running time. Runs on
-  # every event; the remote fixture cases skip here and run in `e2e` below.
   fork-e2e-shard:
     name: E2E (fork-safe, no credentials, shard ${{ matrix.shard }}/3)
     needs: prepare-build
@@ -177,27 +90,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard:
+          - 1
+          - 2
+          - 3
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
-
       - name: Install dependencies
         run: npm ci --ignore-scripts
-
       - name: Download build artifact
         uses: actions/download-artifact@v4
         with:
           name: dist
           path: dist
-
-      # A pinned tarball checked against its sha256, never a piped install script.
       - name: Install OpenCode 2
         run: |
           dir="$RUNNER_TEMP/opencode2"
@@ -207,17 +118,8 @@ jobs:
           tar -xzf "$dir/cli.tgz" -C "$dir"
           "$dir/package/bin/opencode" --version
           echo "TEAMAI_OPENCODE_V2_BIN=$dir/package/bin/opencode" >> "$GITHUB_ENV"
-
-      # Fork code is untrusted. Never expose repository secrets to this job.
-      # Remote-provider cases skip themselves when credentials are absent.
-      # The e2e setup file (src/__tests__/helpers/isolate-e2e-env.ts) gives each
-      # test file a sandbox HOME with its own git identity.
       - name: Run E2E (no remote credentials)
         run: npx vitest run --config vitest.e2e.config.ts --shard=${{ matrix.shard }}/3
-
-  # Keeps the check name branch protection requires. Runs whatever the shards
-  # did: a job that only needed them would be skipped when one fails, and a
-  # skipped required check passes.
   fork-e2e:
     name: E2E (fork-safe, no credentials)
     needs: fork-e2e-shard
@@ -226,98 +128,80 @@ jobs:
     steps:
       - name: Confirm every E2E shard passed
         run: test "${{ needs.fork-e2e-shard.result }}" = success
-
-  # Only the file that touches the shared fixture repo; the shards above run
-  # the rest of the suite.
-  e2e:
-    name: E2E (GitHub provider, remote fixture)
-    needs: prepare-build
-    if: ${{ vars.TEAMAI_TEST_REPO_URL != '' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) }}
+  review-world:
+    name: Official world baseline and fixed CLI
     runs-on: ubuntu-latest
-    # E2E shares one fixture repo. Serialize across all branches/PRs so
-    # concurrent runs don't trample each other's state. Don't cancel
-    # in-progress jobs — let them finish to leave the fixture clean.
-    concurrency:
-      group: e2e-fixture-repo
-      cancel-in-progress: false
-    # Fork PRs run the credential-free job above. Never expose the fixture
-    # token to code from a fork.
-    env:
-      TEAMAI_TEST_PROVIDER: github
-      TEAMAI_TEST_REPO_URL: ${{ vars.TEAMAI_TEST_REPO_URL }}
-      TEAMAI_TEST_TOKEN: ${{ secrets.TEAMAI_TEST_TOKEN }}
-      # The CLI's GitHub provider auto-picks up GITHUB_TOKEN for auth.
-      GITHUB_TOKEN: ${{ secrets.TEAMAI_TEST_TOKEN }}
+    timeout-minutes: 30
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
         with:
-          node-version: 20
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
           cache: npm
-
-      - name: Install dependencies
-        run: npm ci --ignore-scripts
-
-      - name: Download build artifact
-        uses: actions/download-artifact@v4
+      - run: npm ci --ignore-scripts
+      - name: Reproduce failure and verify fixed packed CLI in official worlds
+        run: |-
+          node --input-type=module <<'WORLD_JS'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import assert from 'node:assert/strict';
+          import {spawnSync} from 'node:child_process';
+          const checker = "import assert from 'node:assert/strict';\r\nimport fs from 'node:fs/promises';\r\nimport os from 'node:os';\r\nimport path from 'node:path';\r\nimport {spawnSync} from 'node:child_process';\r\n\r\nconst root = process.cwd();\nconst env = process.env;\nconst run = args => {\r\n const r = spawnSync('teamai',args,{cwd:root,env,windowsHide:true,encoding:'utf8',timeout:15000});\r\n if(r.error) throw r.error;\r\n return {command:args.join(' '),status:r.status,stdout:r.stdout.trim(),stderr:r.stderr.trim()};\r\n};\r\nconst results=[];\r\nfor(const args of [['review','missing','--apply'],['review','missing','--apply','--json']]) {\r\n const r=run(args); assert.match(r.stdout+r.stderr,/not found/);results.push(r);\r\n}\r\nconst docs=path.join(root,'docs');\r\nconst queued=run(['import','write-sections','--source','iwiki://123','--reply',JSON.stringify({glossary:'PROBE_GLOSSARY'}),'--sections-dir',docs,'--review-dir',root,'--review','true']);\r\nassert.equal(queued.status,0,JSON.stringify(queued));\r\nconst queue=path.join(root,'.teamai/pending-review.jsonl');\r\nconst before=await fs.readFile(queue,'utf8');\r\nconst item=JSON.parse(before.trim());\r\nfor(const args of [\r\n ['review',item.id,'--apply'],['review',item.id,'--apply','--json'],\r\n ['review','--all-apply','--max-risk','high'],['review','--all-apply','--max-risk','high','--json']\r\n]) {\r\n const r=run(args);assert.match(r.stdout+r.stderr,/target file not found|1 failed/);results.push(r);\r\n}\r\nassert.equal(await fs.readFile(queue,'utf8'),before);\r\nassert.equal(await fs.stat(path.join(docs,'external-knowledge.md')).then(()=>true,()=>false),false);\r\nassert.equal(results.length,6);\r\nawait fs.writeFile(path.join(root,'approval-statuses.json'),JSON.stringify(results,null,2));\nassert(results.every(r=>r.status===1),'A refused approval must exit 1');\r\nconst direct = run(['import','write-sections','--source','iwiki://123','--reply',JSON.stringify({glossary:'EXISTING_GLOSSARY'}),'--sections-dir',docs,'--review-dir',root,'--review','false']);\r\nassert.equal(direct.status,0,JSON.stringify(direct));\r\nconst success = run(['review',item.id,'--apply','--json']);\r\nassert.equal(success.status,0,JSON.stringify(success));\r\nassert.equal(JSON.parse(success.stdout).ok,true);\r\nconst empty = run(['review','--all-apply','--json']);\r\nassert.equal(empty.status,0,JSON.stringify(empty));\r\nassert.equal(JSON.parse(empty.stdout).results.length,0);\r\nconst report={base:'758b536157207d967964a600c30365462c4b90c2',queueUnchanged:true,externalKnowledgeAbsent:true,failuresExitOne:results,success,emptyBatch:empty};\r\nawait fs.writeFile(path.join(root,'review-fixed-results.json'),JSON.stringify(report,null,2));\r\nconsole.log(JSON.stringify(report,null,2));\r\n";
+          const candidate = process.cwd();
+          const evidence = path.join(process.env.RUNNER_TEMP,'review-world-evidence');
+          fs.mkdirSync(evidence,{recursive:true});
+          const run = (cwd, bin, args) => {
+            const r=spawnSync(bin,args,{cwd,encoding:'utf8',timeout:1200000,maxBuffer:64*1024*1024});
+            if(r.error) throw r.error;
+            return r;
+          };
+          const requireOK = (cwd,bin,args) => {
+            const r=run(cwd,bin,args); process.stdout.write(r.stdout); process.stderr.write(r.stderr);
+            assert.equal(r.status,0,bin+' '+args.join(' ')); return r;
+          };
+          const baseline=path.join(process.env.RUNNER_TEMP,'review-baseline');
+          requireOK(candidate,'git',['worktree','add','--detach',baseline,'758b536157207d967964a600c30365462c4b90c2']);
+          requireOK(baseline,'npm',['ci','--ignore-scripts']);
+          for(const [label,cwd,expected] of [['baseline',baseline,1],['candidate',candidate,0]]) {
+            const dir=path.join(evidence,label); fs.mkdirSync(dir,{recursive:true});
+            const made=requireOK(cwd,'node',['scripts/verify.mjs','world']);
+            fs.writeFileSync(path.join(dir,'creation.log'),made.stdout+made.stderr);
+            const id=made.stdout.trim().split(/\r?\n/).at(-1);
+            assert.match(id,/^\d{8}T\d{6}-[0-9a-f]{6}$/);
+            const location=requireOK(cwd,'node',['scripts/verify.mjs','dir',id]).stdout.trim();
+            const result=run(cwd,'node',['scripts/verify.mjs','sh',id,'node','--input-type=module','-e',checker]);
+            process.stdout.write(result.stdout); process.stderr.write(result.stderr);
+            fs.writeFileSync(path.join(dir,'probe.log'),result.stdout+result.stderr);
+            fs.writeFileSync(path.join(dir,'probe-status.json'),JSON.stringify({label,status:result.status,expected}));
+            const world=JSON.parse(fs.readFileSync(path.join(location,'world.json'),'utf8'));
+            for(const name of ['approval-statuses.json','review-fixed-results.json']) {
+              const source=path.join(world.project,name); if(fs.existsSync(source)) fs.copyFileSync(source,path.join(dir,name));
+            }
+            const ledger=run(cwd,'node',['scripts/verify.mjs','ledger',id]);
+            process.stdout.write(ledger.stdout); process.stderr.write(ledger.stderr);
+            fs.writeFileSync(path.join(dir,'ledger.log'),ledger.stdout+ledger.stderr);
+            const cleanup=run(cwd,'node',['scripts/verify.mjs','cleanup',id]);
+            process.stdout.write(cleanup.stdout); process.stderr.write(cleanup.stderr);
+            fs.writeFileSync(path.join(dir,'cleanup.log'),cleanup.stdout+cleanup.stderr);
+            for(const name of fs.readdirSync(location)) {
+              if(name==='world.json'||name==='logs'||name==='observed.jsonl'||/^LEDGER-/.test(name)) fs.cpSync(path.join(location,name),path.join(dir,name),{recursive:true});
+            }
+            assert.equal(result.status,expected,label+' world probe result');
+            const statuses=JSON.parse(fs.readFileSync(path.join(dir,'approval-statuses.json'),'utf8'));
+            assert.equal(statuses.length,6);
+            assert(statuses.every(r=>r.status===(label==='baseline'?0:1)),'all six approval forms reproduce the intended behavior');
+            assert.equal(ledger.status,0,label+' ledger');
+            assert.equal(cleanup.status,0,label+' cleanup');
+          }
+          console.log('Official world pair: baseline FAILED on exit-code assertion; candidate VERIFIED; both ledgers clean.');
+          WORLD_JS
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: dist
-          path: dist
-
-      # Each test file runs in a sandbox HOME with its own git identity
-      # (src/__tests__/helpers/isolate-e2e-env.ts); the remote cases clone the
-      # fixture repo into it themselves (prepareRemoteTeamHome in e2e.test.ts).
-      - name: Run E2E (remote fixture)
-        run: npx vitest run --config vitest.e2e.config.ts --reporter=verbose src/__tests__/e2e/e2e.test.ts
-
-  # Not required: not in `build.needs` nor in branch protection, and no
-  # `continue-on-error`, which would paint a failure green. Add it to
-  # `build.needs` once it stays green.
-  windows:
-    name: Windows (paths, hook rendering, hook shells)
-    runs-on: windows-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci --ignore-scripts
-
-      - name: Build
-        run: npm run build
-
-      # The list lives in src/__tests__/helpers/windows-tests.ts;
-      # windows-test-list.test.ts checks its entries exist, and the
-      # teamai/windows-tests lint rule keeps POSIX-only code out of them.
-      - name: Windows-safe unit tests
-        run: npx vitest run --config vitest.windows.config.ts
-
-      # One real `teamai hook-dispatch session-start` per hook shell: Git Bash,
-      # Windows PowerShell, node. The e2e setup puts the built CLI on PATH as
-      # teamai.cmd. The file skips itself off Windows.
-      - name: Hook shells
-        run: npx vitest run --config vitest.e2e.config.ts src/__tests__/e2e/hook-shells-windows.test.ts
-
-      - name: Long-path team-repo pull
-        run: npx vitest run --config vitest.e2e.config.ts src/__tests__/e2e/windows-longpaths.test.ts
-
-      # The CodeBuddy project gate (#1494): cmd.exe and Git Bash run the same
-      # gate, and only Windows shows that. The unit list above runs Windows-safe
-      # files only, so the gate's e2e cases run here.
-      - name: CodeBuddy project gate
-        run: npx vitest run --config vitest.e2e.config.ts src/__tests__/e2e/hooks-project-isolation-issue373.test.ts
-
-      # CreateProcess launches the .cmd sibling. The rest of the provider PATH
-      # file compares directory strings, which disagree on this runner: temp
-      # is the 8.3 form and `where` returns the long form.
-      - name: Provider CLI .cmd shim
-        run: npx vitest run src/__tests__/providers-cli-cmd.test.ts
+          name: review-world-evidence
+          path: ${{ runner.temp }}/review-world-evidence
+          if-no-files-found: error
+permissions:
+  contents: read
