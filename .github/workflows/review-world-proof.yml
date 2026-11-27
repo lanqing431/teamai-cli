@@ -1,0 +1,85 @@
+name: Review 2082 official world proof
+on:
+  push:
+    branches:
+      - validate/review-2082-world
+permissions:
+  contents: read
+jobs:
+  review-world:
+    name: Official world baseline and fixed CLI
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Reproduce failure and verify fixed packed CLI in official worlds
+        run: |-
+          node --input-type=module <<'WORLD_JS'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import assert from 'node:assert/strict';
+          import {spawnSync} from 'node:child_process';
+          const checker = "import assert from 'node:assert/strict';\r\nimport fs from 'node:fs/promises';\r\nimport os from 'node:os';\r\nimport path from 'node:path';\r\nimport {spawnSync} from 'node:child_process';\r\n\r\nconst root = process.cwd();\nconst env = process.env;\nconst run = args => {\r\n const r = spawnSync('teamai',args,{cwd:root,env,windowsHide:true,encoding:'utf8',timeout:15000});\r\n if(r.error) throw r.error;\r\n return {command:args.join(' '),status:r.status,stdout:r.stdout.trim(),stderr:r.stderr.trim()};\r\n};\r\nconst results=[];\r\nfor(const args of [['review','missing','--apply'],['review','missing','--apply','--json']]) {\r\n const r=run(args); assert.match(r.stdout+r.stderr,/not found/);results.push(r);\r\n}\r\nconst docs=path.join(root,'docs');\r\nconst queued=run(['import','write-sections','--source','iwiki://123','--reply',JSON.stringify({glossary:'PROBE_GLOSSARY'}),'--sections-dir',docs,'--review-dir',root,'--review','true']);\r\nassert.equal(queued.status,0,JSON.stringify(queued));\r\nconst queue=path.join(root,'.teamai/pending-review.jsonl');\r\nconst before=await fs.readFile(queue,'utf8');\r\nconst item=JSON.parse(before.trim());\r\nfor(const args of [\r\n ['review',item.id,'--apply'],['review',item.id,'--apply','--json'],\r\n ['review','--all-apply','--max-risk','high'],['review','--all-apply','--max-risk','high','--json']\r\n]) {\r\n const r=run(args);assert.match(r.stdout+r.stderr,/target file not found|1 failed/);results.push(r);\r\n}\r\nassert.equal(await fs.readFile(queue,'utf8'),before);\r\nassert.equal(await fs.stat(path.join(docs,'external-knowledge.md')).then(()=>true,()=>false),false);\r\nassert.equal(results.length,6);\r\nawait fs.writeFile(path.join(process.env.TMPDIR,'approval-statuses.json'),JSON.stringify(results,null,2));\nassert(results.every(r=>r.status===1),'A refused approval must exit 1');\r\n";
+          const candidate = process.cwd();
+          const evidence = path.join(process.env.RUNNER_TEMP,'review-world-evidence');
+          fs.mkdirSync(evidence,{recursive:true});
+          const run = (cwd, bin, args) => {
+            const r=spawnSync(bin,args,{cwd,encoding:'utf8',timeout:1200000,maxBuffer:64*1024*1024});
+            if(r.error) throw r.error;
+            return r;
+          };
+          const requireOK = (cwd,bin,args) => {
+            const r=run(cwd,bin,args); process.stdout.write(r.stdout); process.stderr.write(r.stderr);
+            assert.equal(r.status,0,bin+' '+args.join(' ')); return r;
+          };
+          const baseline=path.join(process.env.RUNNER_TEMP,'review-baseline');
+          requireOK(candidate,'git',['worktree','add','--detach',baseline,'758b536157207d967964a600c30365462c4b90c2']);
+          requireOK(baseline,'npm',['ci','--ignore-scripts']);
+          for(const [label,cwd,expected] of [['baseline',baseline,1],['candidate',candidate,0]]) {
+            const dir=path.join(evidence,label); fs.mkdirSync(dir,{recursive:true});
+            const made=requireOK(cwd,'node',['scripts/verify.mjs','world']);
+            fs.writeFileSync(path.join(dir,'creation.log'),made.stdout+made.stderr);
+            const id=made.stdout.trim().split(/\r?\n/).at(-1);
+            assert.match(id,/^\d{8}T\d{6}-[0-9a-f]{6}$/);
+            const location=requireOK(cwd,'node',['scripts/verify.mjs','dir',id]).stdout.trim();
+            requireOK(cwd,'node',['scripts/verify.mjs','teamai',id,'init','https://teamai.test/team/repo.git','--provider','git','--agent','claude']);
+            const result=run(cwd,'node',['scripts/verify.mjs','sh',id,'node','--input-type=module','-e',checker]);
+            process.stdout.write(result.stdout); process.stderr.write(result.stderr);
+            fs.writeFileSync(path.join(dir,'probe.log'),result.stdout+result.stderr);
+            fs.writeFileSync(path.join(dir,'probe-status.json'),JSON.stringify({label,status:result.status,expected}));
+            const world=JSON.parse(fs.readFileSync(path.join(location,'world.json'),'utf8'));
+            for(const name of ['approval-statuses.json','review-fixed-results.json']) {
+              const source=path.join(world.tmp,name); if(fs.existsSync(source)) fs.copyFileSync(source,path.join(dir,name));
+            }
+            const ledger=run(cwd,'node',['scripts/verify.mjs','ledger',id]);
+            process.stdout.write(ledger.stdout); process.stderr.write(ledger.stderr);
+            fs.writeFileSync(path.join(dir,'ledger.log'),ledger.stdout+ledger.stderr);
+            const cleanup=run(cwd,'node',['scripts/verify.mjs','cleanup',id]);
+            process.stdout.write(cleanup.stdout); process.stderr.write(cleanup.stderr);
+            fs.writeFileSync(path.join(dir,'cleanup.log'),cleanup.stdout+cleanup.stderr);
+            for(const name of fs.readdirSync(location)) {
+              if(name==='world.json'||name==='logs'||name==='observed.jsonl'||/^LEDGER-/.test(name)) fs.cpSync(path.join(location,name),path.join(dir,name),{recursive:true});
+            }
+            assert.equal(result.status,expected,label+' world probe result');
+            const statuses=JSON.parse(fs.readFileSync(path.join(dir,'approval-statuses.json'),'utf8'));
+            assert.equal(statuses.length,6);
+            assert(statuses.every(r=>r.status===(label==='baseline'?0:1)),'all six approval forms reproduce the intended behavior');
+            assert.equal(ledger.status,0,label+' ledger');
+            assert.match(ledger.stdout,/Ledger: CLEAN/);
+            assert.equal(cleanup.status,0,label+' cleanup');
+          }
+          console.log('Official world pair: baseline FAILED on exit-code assertion; candidate VERIFIED; both ledgers clean.');
+          WORLD_JS
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: review-world-evidence
+          path: ${{ runner.temp }}/review-world-evidence
+          if-no-files-found: error
