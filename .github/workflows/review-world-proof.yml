@@ -19,6 +19,21 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --ignore-scripts
+      - name: Lint, typecheck, build and affected tests for final source
+        run: >-
+          npm run lint
+
+          npm run typecheck
+
+          npm run build
+
+          npx vitest run src/__tests__/review-cmd.test.ts
+          src/__tests__/review-cmd-output.test.ts
+          src/__tests__/iwiki-review-apply.test.ts
+          src/__tests__/review-store.test.ts
+
+          npx vitest run --config vitest.e2e.config.ts
+          src/__tests__/review-dry-run-e2e.test.ts
       - name: Reproduce failure and verify fixed packed CLI in official worlds
         run: |-
           node --input-type=module <<'WORLD_JS'
@@ -26,7 +41,7 @@ jobs:
           import path from 'node:path';
           import assert from 'node:assert/strict';
           import {spawnSync} from 'node:child_process';
-          const checker = "import assert from 'node:assert/strict';\r\nimport fs from 'node:fs/promises';\r\nimport os from 'node:os';\r\nimport path from 'node:path';\r\nimport {spawnSync} from 'node:child_process';\r\n\r\nconst root = process.cwd();\nconst env = process.env;\nconst run = args => {\r\n const r = spawnSync('teamai',args,{cwd:root,env,windowsHide:true,encoding:'utf8',timeout:15000});\r\n if(r.error) throw r.error;\r\n return {command:args.join(' '),status:r.status,stdout:r.stdout.trim(),stderr:r.stderr.trim()};\r\n};\r\nconst results=[];\r\nfor(const args of [['review','missing','--apply'],['review','missing','--apply','--json']]) {\r\n const r=run(args); assert.match(r.stdout+r.stderr,/not found/);results.push(r);\r\n}\r\n\nawait fs.writeFile(path.join(process.env.TMPDIR,'approval-statuses.json'),JSON.stringify(results,null,2));\nassert.equal(results.length,2);\nassert(results.every(r=>r.status===1),'A refused approval must exit 1');\n";
+          const checker = "import assert from 'node:assert/strict';\r\nimport fs from 'node:fs/promises';\r\nimport os from 'node:os';\r\nimport path from 'node:path';\r\nimport {spawnSync} from 'node:child_process';\r\n\r\nconst root = process.cwd();\nconst env = process.env;\nconst run = args => {\r\n const r = spawnSync('teamai',args,{cwd:root,env,windowsHide:true,encoding:'utf8',timeout:15000});\r\n if(r.error) throw r.error;\r\n return {command:args.join(' '),status:r.status,stdout:r.stdout.trim(),stderr:r.stderr.trim()};\r\n};\r\nconst results=[];\r\nfor(const args of [['review','missing','--apply'],['review','missing','--apply','--json']]) {\r\n const r=run(args); assert.match(r.stdout+r.stderr,/not found/);results.push(r);\r\n}\r\n\nawait fs.writeFile(path.join(process.env.TMPDIR,'approval-statuses.json'),JSON.stringify(results,null,2));\nconst previews=[run(['review','missing','--apply','--dry-run']),run(['review','missing','--apply','--dry-run','--json'])];\nawait fs.writeFile(path.join(process.env.TMPDIR,'dry-run-statuses.json'),JSON.stringify(previews,null,2));\nassert(previews.every(r=>r.status===0),'Dry-run previews retain exit 0');\nassert.equal(results.length,2);\nassert(results.every(r=>r.status===1),'A refused approval must exit 1');\n";
           const candidate = process.cwd();
           const evidence = path.join(process.env.RUNNER_TEMP,'review-world-evidence');
           fs.mkdirSync(evidence,{recursive:true});
@@ -55,7 +70,7 @@ jobs:
             fs.writeFileSync(path.join(dir,'probe.log'),result.stdout+result.stderr);
             fs.writeFileSync(path.join(dir,'probe-status.json'),JSON.stringify({label,status:result.status,expected}));
             const world=JSON.parse(fs.readFileSync(path.join(location,'world.json'),'utf8'));
-            for(const name of ['approval-statuses.json','review-fixed-results.json']) {
+            for(const name of ['approval-statuses.json','dry-run-statuses.json']) {
               const source=path.join(world.tmp,name); if(fs.existsSync(source)) fs.copyFileSync(source,path.join(dir,name));
             }
             const ledger=run(cwd,'node',['scripts/verify.mjs','ledger',id]);
